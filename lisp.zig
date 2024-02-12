@@ -129,23 +129,29 @@ const TokenTree = union(enum) {
         }
     }
 
-    fn debugPrint(self: TokenTree, comptime indent: usize) void {
+    fn debugPrint(self: TokenTree, indent: usize) void {
         switch (self) {
             .group => |array| {
-                print("{s}", .{"    " ** indent});
+                for (0..indent) |_| {
+                    print("    ", .{});
+                }
                 print("\x1b[33m", .{});
                 print("(\n", .{});
                 print("\x1b[0m", .{});
                 for (array.items) |item| {
                     debugPrint(item, indent + 1);
                 }
-                print("{s}", .{"    " ** indent});
+                for (0..indent) |_| {
+                    print("    ", .{});
+                }
                 print("\x1b[33m", .{});
                 print(")\n", .{});
                 print("\x1b[0m", .{});
             },
             .literal => |lit| {
-                print("{s}", .{"    " ** indent});
+                for (0..indent) |_| {
+                    print("    ", .{});
+                }
                 print("{s}\n", .{lit.items});
             },
         }
