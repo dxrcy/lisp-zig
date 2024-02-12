@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs = std.fs;
 const print = std.debug.print;
 const panic = std.debug.panic;
 const ArrayList = std.ArrayList;
@@ -10,147 +9,81 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const filename = "example";
-    const file = try fs.cwd().openFile(filename, .{});
+    const file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
 
-    var tokens = try lex_tokens(&file, allocator);
-    defer tokens.deinit();
-    defer for (tokens.items) |token| {
-        token.deinit();
-    };
+    var input = ArrayList(u8).init(allocator);
+    try file.reader().readAllArrayList(&input, 100);
+    defer input.deinit();
 
-    for (tokens.items) |token| {
-        print("Token: {}\n", .{token});
-    }
-
-    print("\n", .{});
-    var index: usize = 0;
-    const tree = try parse_tree(&tokens, &index, 0, allocator);
+    const tree = try TokenTree.fromString(input.items, allocator);
     defer tree.deinit();
-    print("\n", .{});
-    tree.debug_print(0);
+    tree.debugPrint(0);
 }
 
-fn parse_tree(tokens: *ArrayList(Token), index: *usize, depth: usize, allocator: anytype) !TokenTree {
-    if (depth > 20) {
-        panic("max recursion for parse_tree", .{});
-    }
+test "parse string as tree" {
+    const allocator = std.testing.allocator;
+    const expect = std.testing.expect;
+    const eql = std.mem.eql;
 
-    if (tokens.items.len == 0) {
-        return error.NoTokens;
-    }
-    if (tokens.items.len == 1) {
-        const token = tokens.items[0];
-        switch (token) {
-            .literal => |lit| {
-                return TokenTree{ .literal = lit };
-            },
-            else => return error.SingleBracket,
-        }
-    }
+    const input = "*   ( + 12 3)  \n 81";
+    const tree = try TokenTree.fromString(input, allocator);
+    defer tree.deinit();
 
-    var group = ArrayList(TokenTree).init(allocator);
-
-    while (index.* < tokens.items.len) {
-        const token = tokens.items[index.*];
-        index.* += 1;
-
-        print("{?}\n", .{token});
-        switch (token) {
-            .literal => |lit| {
-                var literal = ArrayList(u8).init(allocator);
-                try literal.appendSlice(lit.items);
-                try group.append(TokenTree{ .literal = literal });
-            },
-            .br_left => {
-                const subgroup = try parse_tree(tokens, index, depth + 1, allocator);
-                try group.append(subgroup);
-            },
-            .br_right => {
-                if (depth == 0) {
-                    return error.UnexpectedRightBracket;
-                }
-                return TokenTree{ .group = group };
-            },
-        }
-    }
-
-    if (depth > 0) {
-        return error.UnexpectedEndOfStream;
-    }
-
-    return TokenTree{ .group = group };
+    // * (+ 12 3) 81
+    try expect(eql(u8, @tagName(tree), "group"));
+    try expect(tree.group.items.len == 3);
+    // *
+    try expect(eql(u8, @tagName(tree.group.items[0]), "literal"));
+    try expect(eql(u8, tree.group.items[0].literal.items, "*"));
+    // (+ 12 3)
+    try expect(eql(u8, @tagName(tree.group.items[1]), "group"));
+    try expect(tree.group.items[1].group.items.len == 3);
+    // +
+    try expect(eql(u8, @tagName(tree.group.items[1].group.items[0]), "literal"));
+    try expect(eql(u8, tree.group.items[1].group.items[0].literal.items, "+"));
+    // 12
+    try expect(eql(u8, @tagName(tree.group.items[1].group.items[1]), "literal"));
+    try expect(eql(u8, tree.group.items[1].group.items[1].literal.items, "12"));
+    // 3
+    try expect(eql(u8, @tagName(tree.group.items[1].group.items[2]), "literal"));
+    try expect(eql(u8, tree.group.items[1].group.items[2].literal.items, "3"));
+    // 81
+    try expect(eql(u8, @tagName(tree.group.items[2]), "literal"));
+    try expect(eql(u8, tree.group.items[2].literal.items, "81"));
 }
 
-// var a = ArrayList(TokenTree).init(allocator);
-// try a.append(TokenTree{ .literal = try string("*", allocator) });
-// var b = ArrayList(TokenTree).init(allocator);
-// try b.append(TokenTree{ .literal = try string("+", allocator) });
-// try b.append(TokenTree{ .literal = try string("12", allocator) });
-// try b.append(TokenTree{ .literal = try string("3", allocator) });
-// try a.append(TokenTree{ .group = b });
-// try a.append(TokenTree{ .literal = try string("81", allocator) });
-// return TokenTree{ .group = a };
-
-fn string(comptime literal: []const u8, allocator: anytype) !ArrayList(u8) {
-    var array = ArrayList(u8).init(allocator);
-    try array.appendSlice(literal);
-    return array;
-}
-
-const TokenTree = union(enum) {
-    group: ArrayList(TokenTree),
+const Token = union(enum) {
+    br_left,
+    br_right,
     literal: ArrayList(u8),
 
-    fn deinit(self: TokenTree) void {
+    pub fn deinit(self: Token) void {
         switch (self) {
-            .group => |array| {
-                for (array.items) |item| {
-                    item.deinit();
-                }
-                array.deinit();
-            },
-            .literal => |lit| lit.deinit(),
+            Token.literal => |lit| lit.deinit(),
+            else => {},
         }
     }
 
-    fn debug_print(self: TokenTree, comptime depth: usize) void {
-        if (depth > 20) {
-            panic("max recursion for debug_print", .{});
-        }
+    pub fn format(
+        self: Token,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
         switch (self) {
-            .group => |array| {
-                print("{s}", .{"    " ** depth});
-                print("\x1b[33m", .{});
-                print("(\n", .{});
-                print("\x1b[0m", .{});
-                for (array.items) |item| {
-                    debug_print(item, depth + 1);
-                }
-                print("{s}", .{"    " ** depth});
-                print("\x1b[33m", .{});
-                print(")\n", .{});
-                print("\x1b[0m", .{});
-            },
-            .literal => |lit| {
-                print("{s}", .{"    " ** depth});
-                print("{s}\n", .{lit.items});
-            },
+            Token.literal => |lit| try writer.print("{s}", .{lit.items}),
+            Token.br_left => try writer.writeAll("("),
+            Token.br_right => try writer.writeAll(")"),
         }
     }
 };
 
-fn lex_tokens(file: *const fs.File, allocator: anytype) !ArrayList(Token) {
+fn lexTokens(input: []const u8, allocator: anytype) !ArrayList(Token) {
     var tokens = ArrayList(Token).init(allocator);
     var current_token = ArrayList(u8).init(allocator);
 
-    var reader = file.reader();
-    while (true) {
-        const char = reader.readByte() catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-
+    for (input) |char| {
         switch (char) {
             ' ', '(', ')' => {
                 if (current_token.items.len > 0) {
@@ -180,28 +113,98 @@ fn lex_tokens(file: *const fs.File, allocator: anytype) !ArrayList(Token) {
     return tokens;
 }
 
-const Token = union(enum) {
-    br_left,
-    br_right,
+const TokenTree = union(enum) {
+    group: ArrayList(TokenTree),
     literal: ArrayList(u8),
 
-    pub fn deinit(self: Token) void {
+    fn deinit(self: TokenTree) void {
         switch (self) {
-            Token.literal => |lit| lit.deinit(),
-            else => {},
+            .group => |array| {
+                for (array.items) |item| {
+                    item.deinit();
+                }
+                array.deinit();
+            },
+            .literal => |lit| lit.deinit(),
         }
     }
 
-    pub fn format(
-        self: Token,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    fn debugPrint(self: TokenTree, comptime indent: usize) void {
         switch (self) {
-            Token.literal => |lit| try writer.print("{s}", .{lit.items}),
-            Token.br_left => try writer.writeAll("("),
-            Token.br_right => try writer.writeAll(")"),
+            .group => |array| {
+                print("{s}", .{"    " ** indent});
+                print("\x1b[33m", .{});
+                print("(\n", .{});
+                print("\x1b[0m", .{});
+                for (array.items) |item| {
+                    debugPrint(item, indent + 1);
+                }
+                print("{s}", .{"    " ** indent});
+                print("\x1b[33m", .{});
+                print(")\n", .{});
+                print("\x1b[0m", .{});
+            },
+            .literal => |lit| {
+                print("{s}", .{"    " ** indent});
+                print("{s}\n", .{lit.items});
+            },
         }
+    }
+
+    fn fromString(reader: anytype, allocator: anytype) !TokenTree {
+        var tokens = try lexTokens(reader, allocator);
+        defer tokens.deinit();
+        defer for (tokens.items) |token| {
+            token.deinit();
+        };
+
+        var index: usize = 0;
+        return TokenTree.fromTokens(&tokens, &index, 0, allocator);
+    }
+
+    fn fromTokens(tokens: *ArrayList(Token), index: *usize, depth: usize, allocator: anytype) !TokenTree {
+        if (tokens.items.len == 0) {
+            return error.NoTokens;
+        }
+        if (tokens.items.len == 1) {
+            const token = tokens.items[0];
+            switch (token) {
+                .literal => |lit| {
+                    return TokenTree{ .literal = lit };
+                },
+                else => return error.SingleBracket,
+            }
+        }
+
+        var group = ArrayList(TokenTree).init(allocator);
+
+        while (index.* < tokens.items.len) {
+            const token = tokens.items[index.*];
+            index.* += 1;
+
+            switch (token) {
+                .literal => |lit| {
+                    var literal = ArrayList(u8).init(allocator);
+                    try literal.appendSlice(lit.items);
+                    try group.append(TokenTree{ .literal = literal });
+                },
+                .br_left => {
+                    const subgroup = try TokenTree.fromTokens(tokens, index, depth + 1, allocator);
+                    try group.append(subgroup);
+                },
+                .br_right => {
+                    if (depth == 0) {
+                        return error.UnexpectedRightBracket;
+                    }
+                    return TokenTree{ .group = group };
+                },
+            }
+        }
+
+        if (depth > 0) {
+            return error.UnexpectedEndOfStream;
+        }
+
+        return TokenTree{ .group = group };
     }
 };
