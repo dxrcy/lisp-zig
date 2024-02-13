@@ -1,6 +1,8 @@
 const std = @import("std");
 const print = std.debug.print;
 const panic = std.debug.panic;
+const eql = std.mem.eql;
+const stdin = std.io.getStdIn();
 const ArrayList = std.ArrayList;
 
 pub fn main() !void {
@@ -8,23 +10,40 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const filename = "example";
-    const file = try std.fs.cwd().openFile(filename, .{});
-    defer file.close();
-
     var input = ArrayList(u8).init(allocator);
-    try file.reader().readAllArrayList(&input, 100);
     defer input.deinit();
 
+    // Read input from file argument or stdin
+    var args = std.process.args();
+    _ = args.next();
+    if (args.next()) |filename| {
+        if (args.next()) |_| {
+            return error.TooManyArguments;
+        }
+
+        // Read file
+        const file = try std.fs.cwd().openFile(filename, .{});
+        defer file.close();
+        try file.reader().readAllArrayList(&input, 100);
+    } else {
+        // Read line from stdin
+        try stdin.reader().streamUntilDelimiter(input.writer(), '\n', null);
+    }
+
+    // Parse token tree
     const tree = try TokenTree.fromString(input.items, allocator);
     defer tree.deinit();
     tree.debugPrint(0);
+
+    // Evaluate answer
+    const answer = try evaluateTokenTree(tree);
+    print("\n\x1b[34m=>\x1b[0m ", .{});
+    print("{d}\n", .{answer});
 }
 
 test "parse string as tree" {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
-    const eql = std.mem.eql;
 
     const input = "*   ( + 12 3)  \n 81";
     const tree = try TokenTree.fromString(input, allocator);
@@ -51,6 +70,44 @@ test "parse string as tree" {
     // 81
     try expect(eql(u8, @tagName(tree.group.items[2]), "literal"));
     try expect(eql(u8, tree.group.items[2].literal.items, "81"));
+
+    try expect(try evaluateTokenTree(tree) == 1215.0);
+}
+
+fn evaluateTokenTree(tree: TokenTree) !f32 {
+    switch (tree) {
+        .group => |group| {
+            if (group.items.len == 0) {
+                return error.EmptyGroup;
+            }
+            if (!eql(u8, @tagName(group.items[0]), "literal")) {
+                return error.OperationNotALiteral;
+            }
+            const operation = group.items[0].literal;
+
+            if (eql(u8, operation.items, "+")) {
+                if (group.items.len != 3) {
+                    return error.IncorrectArgumentCount;
+                }
+                const a = try evaluateTokenTree(group.items[1]);
+                const b = try evaluateTokenTree(group.items[2]);
+                return a + b;
+            } else if (eql(u8, operation.items, "*")) {
+                if (group.items.len != 3) {
+                    return error.IncorrectArgumentCount;
+                }
+                const a = try evaluateTokenTree(group.items[1]);
+                const b = try evaluateTokenTree(group.items[2]);
+                return a * b;
+            } else {
+                return error.UnknownOperation;
+            }
+        },
+        .literal => |lit| {
+            const number = try std.fmt.parseFloat(f32, lit.items);
+            return number;
+        },
+    }
 }
 
 const Token = union(enum) {
