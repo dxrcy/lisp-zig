@@ -1,4 +1,7 @@
-# Lisp-like Calculator in Zig
+# Lispcalc-Zig
+
+Simple Lisp-like Calculator in Zig.
+Every branch is lazy evaluated.
 
 ```sh
 # Evaluate file
